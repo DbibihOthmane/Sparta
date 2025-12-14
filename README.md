@@ -44,3 +44,7 @@ et peut résulter à une meilleur conduite !
 Le but de ce jeu est de s'amuser avec ces paramètre pour générer des models puissants et les comparer ensuite en mode course !
 
 
+https://github.com/user-attachments/assets/1613745b-e98e-49eb-97c5-c75076a42e4b
+
+
+
