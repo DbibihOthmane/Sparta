@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="ie=edge" />
+    <script src="https://cdn.jsdelivr.net/npm/js-clipper@1.0.1/clipper.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/0.8.0/p5.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/0.8.0/addons/p5.dom.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.1.0/dist/tf.min.js"></script>
+    <title>Voiture</title>
+
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #000;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      }
+      canvas { display: block; }
+
+      .ui-toast {
+        position: fixed;
+        left: 16px;
+        bottom: 16px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        color: rgba(255,255,255,0.92);
+        background: rgba(18,18,20,0.85);
+        border: 1px solid rgba(255,255,255,0.12);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+        font-size: 13px;
+        line-height: 1.35;
+        max-width: min(520px, calc(100vw - 32px));
+        z-index: 10000;
+        pointer-events: none;
+        opacity: 0;
+        transform: translateY(6px);
+        transition: opacity 140ms ease, transform 140ms ease;
+      }
+      .ui-toast.show { opacity: 1; transform: translateY(0px); }
+
+      .ui-modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.55);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        z-index: 10001;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .ui-modal {
+        width: min(720px, calc(100vw - 32px));
+        border-radius: 16px;
+        background: rgba(18,18,20,0.92);
+        border: 1px solid rgba(255,255,255,0.14);
+        box-shadow: 0 18px 60px rgba(0,0,0,0.55);
+        padding: 16px;
+        color: rgba(255,255,255,0.92);
+      }
+      .ui-modal h2 {
+        margin: 0 0 8px 0;
+        font-size: 16px;
+        font-weight: 700;
+      }
+      .ui-modal p {
+        margin: 0 0 12px 0;
+        font-size: 13px;
+        color: rgba(255,255,255,0.78);
+        white-space: pre-wrap;
+      }
+      .ui-modal input, .ui-modal textarea {
+        width: 100%;
+        box-sizing: border-box;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.18);
+        background: rgba(0,0,0,0.35);
+        color: rgba(255,255,255,0.92);
+        padding: 10px 12px;
+        font-size: 13px;
+        outline: none;
+      }
+      .ui-modal textarea { min-height: 160px; resize: vertical; }
+        .ui-modal select.ui-select {
+          width: 100%;
+          background: rgba(255,255,255,0.06);
+          color: #fff;
+          border: 1px solid rgba(255,255,255,0.14);
+          border-radius: 10px;
+          padding: 8px 10px;
+          outline: none;
+        }
+        .ui-modal select.ui-select option {
+          background: #0b0b12;
+          color: #fff;
+        }
+
+        .ui-btn-small {
+          padding: 6px 10px;
+          font-size: 12px;
+          border-radius: 10px;
+          line-height: 1;
+        }
+
+        .ui-hud-panel {
+          background: rgba(10,10,14,0.78);
+          border: 1px solid rgba(255,105,210,0.34);
+          border-radius: 12px;
+          padding: 8px;
+          backdrop-filter: blur(6px);
+        }
+
+        .ui-hud-panel button {
+          border: 1px solid rgba(255,255,255,0.12);
+          background: rgba(255,255,255,0.06);
+          color: rgba(255,255,255,0.92);
+          cursor: pointer;
+        }
+
+        .ui-hud-panel button:hover {
+          border-color: rgba(255,105,210,0.38);
+          background: rgba(255,105,210,0.10);
+        }
+
+        .ui-hud-panel .btn-primary {
+          border-color: rgba(255,105,210,0.55);
+          background: linear-gradient(135deg, rgba(255,105,210,0.28), rgba(170,70,255,0.22));
+          color: rgba(255,255,255,0.95);
+          font-weight: 700;
+        }
+
+        .ui-hud-panel .btn-primary:hover {
+          border-color: rgba(255,105,210,0.80);
+          background: linear-gradient(135deg, rgba(255,105,210,0.36), rgba(170,70,255,0.28));
+        }
+
+        .ui-checklist {
+          width: 100%;
+          max-height: 260px;
+          overflow: auto;
+          border: 1px solid rgba(255,255,255,0.14);
+          border-radius: 12px;
+          background: rgba(0,0,0,0.22);
+          padding: 6px;
+          box-sizing: border-box;
+        }
+
+        .ui-checkitem {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          padding: 8px 10px;
+          border-radius: 10px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(255,255,255,0.03);
+          cursor: pointer;
+          user-select: none;
+          margin-bottom: 6px;
+        }
+
+        .ui-checkitem:last-child { margin-bottom: 0; }
+
+        .ui-checkitem.selected {
+          border-color: rgba(255,105,210,0.55);
+          background: rgba(255,105,210,0.12);
+        }
+
+        .ui-checkitem .tick {
+          width: 18px;
+          height: 18px;
+          border-radius: 6px;
+          border: 1px solid rgba(255,255,255,0.22);
+          background: rgba(0,0,0,0.22);
+        }
+
+        .ui-checkitem.selected .tick {
+          border-color: rgba(255,105,210,0.8);
+          background: rgba(255,105,210,0.35);
+        }
+      .ui-modal .row {
+        display: flex;
+        gap: 10px;
+        justify-content: flex-end;
+        margin-top: 12px;
+      }
+      .ui-modal button {
+        border: 0;
+        border-radius: 12px;
+        padding: 10px 12px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .ui-modal .btn-secondary {
+        background: rgba(255,255,255,0.10);
+        color: rgba(255,255,255,0.92);
+      }
+      .ui-modal .btn-primary {
+        background: rgba(255,255,255,0.92);
+        color: rgba(0,0,0,0.92);
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+
+    <script src="nn.js"></script>
+    <script src="ga.js"></script>
+    <script src="ray.js"></script>
+    <script src="boundary.js"></script>
+    <script src="obstacles.js"></script>
+    <script src="obstacleEditor.js"></script>
+    <script src="trackBuilder.js"></script>
+    <script src="brainStorage.js"></script>
+    <script src="vehicle.js"></script>
+    <script src="sketch.js"></script>
+</body>
+</html>
