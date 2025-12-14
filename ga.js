@@ -44,7 +44,7 @@ function nextGeneration() {
     // l'heureux élu !
     let vehicle = savedVehicles[index];
     // on en fait une copie et on la mute
-    let child = new Vehicle(vehicle.brain);
+    let child = new RobotVehicle(vehicle.brain);
     child.mutate();
     return child;
   }

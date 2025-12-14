@@ -1,6 +1,5 @@
-const TOTAL = 100;
-
 // TRAINING tunables (controlled by sliders)
+let TOTAL = 100;  // Number of cars in population
 let MUTATION_RATE = 0.1;
 let LIFESPAN = 25;
 let SIGHT = 50;
@@ -42,12 +41,39 @@ let btnTrainSave = null;
 let btnTrainLoad = null;
 let btnTrainDelete = null;
 let btnTrainRace = null;
+let btnTrainRaceHumanVsRobot = null;
 let btnTrainNewTrack = null;
 
 // RACE controls as buttons
 let raceControlsPanel = null;
 let btnRacePick = null;
 let btnRaceBack = null;
+
+// Human player controls
+let humanControls = {
+  steering: 0.5,   // 0-1 range (0.5 = center, straight)
+  throttle: 0.85,  // 0-1 range (0 = stopped, 1.0 = full speed)
+  accelerating: false,
+  braking: false,
+  turningLeft: false,
+  turningRight: false,
+  steeringAngle: 0,  // Direct angle control for better keyboard response
+  speed: 0.85       // Current speed level (0-1)
+};
+
+// Camera system for following human player
+let cameraState = {
+  enabled: false,
+  target: null,  // Reference to human vehicle
+};
+
+// Game state for human racing
+let humanRaceState = {
+  isGameOver: false,
+  startTime: 0,
+  survivalTime: 0,
+  score: 0,
+};
 
 function ensureToast() {
   if (uiToastEl) return;
@@ -290,7 +316,8 @@ function ensureTrainingControls() {
   btnTrainSave = mkBtn('Save', true, () => doTrainingSave());
   btnTrainLoad = mkBtn('Load', false, () => doTrainingLoad());
   btnTrainDelete = mkBtn('Delete', false, () => doTrainingDelete());
-  btnTrainRace = mkBtn('Race', false, () => doTrainingRace());
+  btnTrainRace = mkBtn('Race: Robot', false, () => doTrainingRace());
+  btnTrainRaceHumanVsRobot = mkBtn('Race: H vs R', false, () => doTrainingRaceHumanVsRobot());
   btnTrainNewTrack = mkBtn('New track', false, () => doTrainingNewTrack());
 }
 
@@ -530,7 +557,7 @@ function doTrainingRace() {
         showToast('Pick at least one racer');
         return;
       }
-      initRaceVehicles(chosen);
+      initRaceVehicles(chosen, false);  // false = no human player
       if (raceVehicles.length === 0) {
         showToast('Could not load selected brains');
         return;
@@ -540,7 +567,42 @@ function doTrainingRace() {
   });
 }
 
+function doTrainingRaceHumanVsRobot() {
+  const brains = BrainStorage.listAllBrains();
+  if (!brains || brains.length === 0) {
+    showModal({
+      title: 'No model available',
+      message: 'You need at least one trained model to race against',
+      kind: 'info',
+      okText: 'OK',
+    });
+    return;
+  }
+  showModalMultiSelect({
+    title: 'Human vs Robot Race',
+    message: 'Select AI opponents to race against (you control the human car with arrow keys):',
+    options: brains,
+    selected: [],
+    okText: 'Start Race',
+    cancelText: 'Cancel',
+    onOk: (chosen) => {
+      if (!chosen || chosen.length === 0) {
+        showToast('Pick at least one AI opponent');
+        return;
+      }
+      initRaceVehicles(chosen, true);  // true = include human player
+      if (raceVehicles.length === 0) {
+        showToast('Could not load selected brains');
+        return;
+      }
+      mode = 'RACE';
+      showToast('Use ARROW KEYS to control your car!', 2500);
+    },
+  });
+}
+
 // TRAINING parameter sliders (minimal set requested)
+let totalCarsSlider;
 let mutationRateSlider;
 let lifespanSlider;
 let maxSpeedSlider;
@@ -565,6 +627,7 @@ function resetTrainingRun() {
 }
 
 function setTrainingParamsFromSliders() {
+  if (totalCarsSlider) TOTAL = Number(totalCarsSlider.value());
   if (mutationRateSlider) MUTATION_RATE = Number(mutationRateSlider.value());
   if (lifespanSlider) LIFESPAN = Number(lifespanSlider.value());
   if (maxSpeedSlider) MAXSPEED = Number(maxSpeedSlider.value());
@@ -574,6 +637,7 @@ function setTrainingParamsFromSliders() {
 
 function getCurrentTrainingParams() {
   return {
+    totalCars: TOTAL,
     mutationRate: MUTATION_RATE,
     lifespan: LIFESPAN,
     maxspeed: MAXSPEED,
@@ -584,12 +648,14 @@ function getCurrentTrainingParams() {
 
 function applySavedParamsToGlobalsAndSliders(params) {
   if (!params) return;
+  if (typeof params.totalCars === 'number') TOTAL = params.totalCars;
   if (typeof params.mutationRate === 'number') MUTATION_RATE = params.mutationRate;
   if (typeof params.lifespan === 'number') LIFESPAN = params.lifespan;
   if (typeof params.maxspeed === 'number') MAXSPEED = params.maxspeed;
   if (typeof params.maxforce === 'number') MAXFORCE = params.maxforce;
   if (typeof params.sight === 'number') SIGHT = params.sight;
 
+  if (totalCarsSlider && typeof params.totalCars === 'number') totalCarsSlider.value(params.totalCars);
   if (mutationRateSlider && typeof params.mutationRate === 'number') mutationRateSlider.value(params.mutationRate);
   if (lifespanSlider && typeof params.lifespan === 'number') lifespanSlider.value(params.lifespan);
   if (maxSpeedSlider && typeof params.maxspeed === 'number') maxSpeedSlider.value(params.maxspeed);
@@ -608,7 +674,8 @@ function applyParamsToVehicles(vehicles) {
 }
 
 function showTrainingParamUI(show) {
-  const sliders = [mutationRateSlider, lifespanSlider, maxSpeedSlider, maxForceSlider, sightSlider];
+  // Reordered to match setup: CARS moved to bottom
+  const sliders = [mutationRateSlider, lifespanSlider, maxSpeedSlider, maxForceSlider, sightSlider, totalCarsSlider];
   for (const s of sliders) {
     if (!s) continue;
     if (show) s.show();
@@ -622,13 +689,13 @@ function showTrainingParamUI(show) {
 }
 
 function positionTrainingParamUI() {
-  const sliders = [mutationRateSlider, lifespanSlider, maxSpeedSlider, maxForceSlider, sightSlider];
+  const sliders = [totalCarsSlider, mutationRateSlider, lifespanSlider, maxSpeedSlider, maxForceSlider, sightSlider];
   const w = 220;
   const margin = 14;
-  const left = Math.max(margin, width - w - margin);
-  let y = 10;
+  // ALWAYS position on right side
+  const left = width - w - margin;
+  let y = 80;  // to match setup() starting position
 
-  // Labels and sliders are created in order: label then slider.
   for (let i = 0; i < sliders.length; i++) {
     const label = trainingParamLabels[i];
     const slider = sliders[i];
@@ -1466,7 +1533,10 @@ function buildTrackFromPoints(points, pathWidth) {
 
 
 function setup() {
-  createCanvas(windowWidth, windowHeight);
+  const canvas = createCanvas(windowWidth, windowHeight);
+  // Set canvas z-index below UI elements so sliders are clickable
+  canvas.style('z-index', '-1');
+
   tf.setBackend('cpu');
 
   ensureToast();
@@ -1482,7 +1552,7 @@ function setup() {
   speedSlider.hide();
 
   // Themed label for the speed slider
-  speedSliderLabel = createDiv('Increase speed');
+  speedSliderLabel = createDiv('Simulation speed');
   speedSliderLabel.style('color', '#ff69d2');
   speedSliderLabel.style('font-size', '12px');
   speedSliderLabel.style('font-family', 'sans-serif');
@@ -1496,18 +1566,22 @@ function setup() {
   speedSliderLabel.hide();
 
   // Minimal TRAINING-only sliders requested
-  const left = 10;
-  const top = 10;
+  // Position on RIGHT side to avoid overlap with centered control panel
   const w = 220;
+  const margin = 14;
+  const left = windowWidth - w - margin;
+  const top = 80;  // Start below control panel (which may wrap to ~60-70px height)
   const labelStyle = (d) => {
     d.style('color', '#fff');
     d.style('font-size', '12px');
     d.style('font-family', 'sans-serif');
-    d.style('z-index', '1000');
+    d.style('z-index', '1001');  // Higher than panel (1000) to prevent overlap
   };
   const sliderStyle = (s) => {
     s.style('width', `${w}px`);
-    s.style('z-index', '1000');
+    s.style('z-index', '1001');  // Higher than panel (1000) to prevent overlap
+    s.style('pointer-events', 'auto');
+    s.style('cursor', 'pointer');
   };
 
   let y = top;
@@ -1521,6 +1595,9 @@ function setup() {
     sliderStyle(slider);
     y += 28;
   };
+
+  totalCarsSlider = createSlider(10, 300, TOTAL, 1);
+  mk('CARS', totalCarsSlider);
 
   mutationRateSlider = createSlider(0, 0.5, MUTATION_RATE, 0.01);
   mk('MUTATION_RATE', mutationRateSlider);
@@ -1545,11 +1622,24 @@ function setup() {
       resetTrainingRun();
     }
   };
+
+  // Also use .input() for immediate feedback while dragging
+  const onParamInput = () => {
+    setTrainingParamsFromSliders();
+  };
+
+  totalCarsSlider.changed(onParamChanged);
+  totalCarsSlider.input(onParamInput);
   mutationRateSlider.changed(onParamChanged);
+  mutationRateSlider.input(onParamInput);
   lifespanSlider.changed(onParamChanged);
+  lifespanSlider.input(onParamInput);
   maxSpeedSlider.changed(onParamChanged);
+  maxSpeedSlider.input(onParamInput);
   maxForceSlider.changed(onParamChanged);
+  maxForceSlider.input(onParamInput);
   sightSlider.changed(onParamChanged);
+  sightSlider.input(onParamInput);
 
   showTrainingParamUI(false);
 
@@ -1574,6 +1664,187 @@ function positionUI() {
 function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
   positionUI();
+}
+
+// ============================================
+// Human Player & Camera Functions
+// ============================================
+
+function updateHumanControls() {
+  const up = keyIsDown(UP_ARROW);
+  const down = keyIsDown(DOWN_ARROW);
+  const left = keyIsDown(LEFT_ARROW);
+  const right = keyIsDown(RIGHT_ARROW);
+
+  // Incremental speed control
+  const accelRate = 0.02;   // Speed increase per frame
+  const decelRate = 0.015;  // Speed decrease per frame
+  const minSpeed = 0.0;     // Minimum speed (0% - full stop)
+  const maxSpeed = 1.0;     // Maximum speed (100%)
+
+  if (up && !down) {
+    // Accelerate: gradually increase speed
+    humanControls.speed = min(maxSpeed, humanControls.speed + accelRate);
+    humanControls.accelerating = true;
+    humanControls.braking = false;
+  } else if (down && !up) {
+    // Decelerate: gradually decrease speed
+    humanControls.speed = max(minSpeed, humanControls.speed - decelRate);
+    humanControls.accelerating = false;
+    humanControls.braking = true;
+  } else {
+    // Coast: maintain current speed
+    humanControls.accelerating = false;
+    humanControls.braking = false;
+  }
+
+  // Update throttle to match current speed
+  humanControls.throttle = humanControls.speed;
+
+  // Discrete angle-based steering for better keyboard control
+  // Based on p5.js racing game best practices
+  const turnRate = 0.03;        // Radians to turn per frame when key is held (reduced)
+  const maxSteerAngle = 0.25;   // Maximum steering angle (in radians, ~14 degrees)
+  const returnRate = 0.02;      // How fast steering returns to center
+
+  if (left && !right) {
+    // Turn left: decrease angle
+    humanControls.steeringAngle = max(-maxSteerAngle, humanControls.steeringAngle - turnRate);
+    humanControls.turningLeft = true;
+    humanControls.turningRight = false;
+  } else if (right && !left) {
+    // Turn right: increase angle
+    humanControls.steeringAngle = min(maxSteerAngle, humanControls.steeringAngle + turnRate);
+    humanControls.turningLeft = false;
+    humanControls.turningRight = true;
+  } else {
+    // Auto-center when no keys pressed
+    if (abs(humanControls.steeringAngle) < returnRate) {
+      humanControls.steeringAngle = 0;
+    } else if (humanControls.steeringAngle > 0) {
+      humanControls.steeringAngle -= returnRate;
+    } else {
+      humanControls.steeringAngle += returnRate;
+    }
+    humanControls.turningLeft = false;
+    humanControls.turningRight = false;
+  }
+
+  // Convert angle to 0-1 range for compatibility with vehicle system
+  // Map -maxSteerAngle to maxSteerAngle -> 0 to 1
+  humanControls.steering = map(humanControls.steeringAngle, -maxSteerAngle, maxSteerAngle, 0, 1);
+}
+
+function getHumanVehicle() {
+  if (mode !== 'RACE') return null;
+  return raceVehicles.find(v => v && v instanceof HumanVehicle) || null;
+}
+
+function applyCameraTransform() {
+  if (!cameraState.enabled || !cameraState.target) return;
+
+  const car = cameraState.target;
+
+  // IMPORTANT: Camera ONLY follows human player in human vs robot mode
+  // Do not apply camera if target is not a human vehicle
+  if (!(car instanceof HumanVehicle)) return;
+
+  // Safety check: don't apply transform if car is invalid or has no velocity
+  if (!car || !car.vel || !car.pos) return;
+
+  // Fixed camera: no rotation, zoomed in to show ~80-160 pixels around car
+  // Base view radius (minimum visibility)
+  let baseViewRadius = 80;
+  
+  // Calculate dynamic zoom based on speed
+  const currentSpeed = (car.vel && typeof car.vel.mag === 'function') ? car.vel.mag() : 0;
+  // Map speed from 0..MAXSPEED to 0..120 extra pixels of view radius.
+  // We use MAXSPEED or a default of 5 for the mapping range.
+  const topSpeed = (typeof MAXSPEED !== 'undefined') ? MAXSPEED : 5;
+  const dynamicPadding = map(currentSpeed, 0, topSpeed, 0, 120); 
+  
+  const viewRadius = baseViewRadius + dynamicPadding;
+  const zoomFactor = min(width, height) / (viewRadius * 2);
+
+  translate(width / 2, height / 2);              // Center canvas
+  scale(zoomFactor);                              // Zoom in to show limited area
+  translate(-car.pos.x, -car.pos.y);            // Follow car position (no rotation)
+}
+
+function drawMinimap() {
+  if (!cameraState.enabled || mode !== 'RACE') return;
+  if (!walls || walls.length === 0) return;
+
+  // Calculate track bounds
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const wall of walls) {
+    if (!wall || !wall.a || !wall.b) continue;
+    minX = min(minX, wall.a.x, wall.b.x);
+    minY = min(minY, wall.a.y, wall.b.y);
+    maxX = max(maxX, wall.a.x, wall.b.x);
+    maxY = max(maxY, wall.a.y, wall.b.y);
+  }
+
+  // Minimap dimensions and position
+  const mapSize = 150;
+  const mapX = 16;
+  const mapY = height - mapSize - 16;
+  const trackWidth = maxX - minX;
+  const trackHeight = maxY - minY;
+  const scale = (mapSize - 20) / max(trackWidth, trackHeight);
+
+  push();
+
+  // Background
+  noStroke();
+  fill(10, 10, 14, 220);
+  rect(mapX, mapY, mapSize, mapSize, 12);
+
+  // Border
+  noFill();
+  stroke(255, 105, 210, 100);
+  strokeWeight(1.5);
+  rect(mapX, mapY, mapSize, mapSize, 12);
+
+  // Draw track walls
+  stroke(255, 255, 255, 120);
+  strokeWeight(1);
+  for (const wall of walls) {
+    if (!wall || !wall.a || !wall.b) continue;
+    const x1 = mapX + 10 + (wall.a.x - minX) * scale;
+    const y1 = mapY + 10 + (wall.a.y - minY) * scale;
+    const x2 = mapX + 10 + (wall.b.x - minX) * scale;
+    const y2 = mapY + 10 + (wall.b.y - minY) * scale;
+    line(x1, y1, x2, y2);
+  }
+
+  // Draw racer positions
+  for (const v of raceVehicles) {
+    if (!v || !v.pos || v.dead) continue;
+
+    const dotX = mapX + 10 + (v.pos.x - minX) * scale;
+    const dotY = mapY + 10 + (v.pos.y - minY) * scale;
+
+    // Different color/size for human player
+    if (v instanceof HumanVehicle) {
+      // Human player - larger, bright cyan
+      fill(0, 255, 255);
+      noStroke();
+      circle(dotX, dotY, 8);
+      // Outline
+      noFill();
+      stroke(255, 255, 255, 200);
+      strokeWeight(1.5);
+      circle(dotX, dotY, 8);
+    } else {
+      // AI racers - smaller, use their render color
+      fill(v.renderColor || color(255, 105, 210));
+      noStroke();
+      circle(dotX, dotY, 4);
+    }
+  }
+
+  pop();
 }
 
 function parseBrainNameList(raw) {
@@ -1664,7 +1935,20 @@ function gradientForBrainName(name, idx) {
   return { a, b, mid };
 }
 
-function initRaceVehicles(names) {
+function initRaceVehicles(names, includeHuman = false) {
+  // Properly dispose old race vehicles before creating new ones
+  if (raceVehicles && raceVehicles.length > 0) {
+    for (const v of raceVehicles) {
+      if (v && typeof v.dispose === 'function') {
+        // Only dispose robot vehicles (they have brains to dispose)
+        // Human vehicles have no brain, so dispose is a no-op
+        if (v instanceof RobotVehicle) {
+          v.dispose();
+        }
+      }
+    }
+  }
+
   raceBrainNames = names.slice();
   raceVehicles = [];
   resetBestCarVfx();
@@ -1672,13 +1956,57 @@ function initRaceVehicles(names) {
   activeCheckpoint = null;
   lastCheckpointHit = null;
 
+  // Reset camera - ONLY enable in human vs robot mode
+  cameraState.enabled = false;
+  cameraState.target = null;
+
+  // Reset human controls
+  humanControls.steering = 0.5;
+  humanControls.throttle = 0.85;
+  humanControls.steeringAngle = 0;
+  humanControls.speed = 0.85;
+
+  // Reset human race state
+  if (includeHuman) {
+    humanRaceState.isGameOver = false;
+    humanRaceState.startTime = Date.now();
+    humanRaceState.survivalTime = 0;
+    humanRaceState.score = 0;
+  }
+
+  // Create human player first (if requested)
+  if (includeHuman) {
+    const humanVehicle = new HumanVehicle();
+    humanVehicle.displayName = 'YOU';
+    humanVehicle.ignoreLifespan = true;
+    humanVehicle.isRace = true;
+    humanVehicle.sight = 40;  // Fixed sight distance for human player
+
+    // Distinct color for human (bright cyan/green)
+    colorMode(HSB, 360, 100, 100, 255);
+    const humanColorA = color(180, 100, 100, 255);  // Cyan
+    const humanColorB = color(140, 100, 100, 255);  // Light cyan
+    const humanMid = lerpColor(humanColorA, humanColorB, 0.5);
+    colorMode(RGB, 255);
+
+    humanVehicle.renderColorA = humanColorA;
+    humanVehicle.renderColorB = humanColorB;
+    humanVehicle.renderColor = humanMid;
+
+    raceVehicles.push(humanVehicle);
+
+    // Enable camera ONLY for human player
+    cameraState.enabled = true;
+    cameraState.target = humanVehicle;
+  }
+
   for (let i = 0; i < raceBrainNames.length; i++) {
     const brainName = raceBrainNames[i];
     const brain = BrainStorage.loadBrain(brainName);
     if (!brain) continue;
     // Mark loaded (some storage versions don't set this)
     brain.isLoaded = true;
-    const v = new Vehicle(brain);
+    const v = new RobotVehicle(brain);
 
     // Apply saved params (if present) to this racer instance
     if (brain.params) {
@@ -1699,6 +2027,34 @@ function initRaceVehicles(names) {
     v.isRace = true;
     // Race should run forever; if a car dies, it will respawn.
     raceVehicles.push(v);
+  }
+
+  // ------------------------------------------------------------
+  // Align all cars with the track direction immediately.
+  // ------------------------------------------------------------
+  let startDir = createVector(1, 0); // Default right
+  if (checkpoints && checkpoints.length > 1) {
+    // Direction from start (cp[0]) to next cp (cp[1])
+    // Use midpoints to be safe
+    const p1 = checkpoints[0].midpoint();
+    const p2 = checkpoints[1].midpoint();
+    startDir = p5.Vector.sub(p2, p1).normalize();
+  }
+  
+  // Apply a tiny velocity in this direction so heading() works correctly
+  // and manually rotate rays to match.
+  for (const v of raceVehicles) {
+    if (!v) continue;
+    // Tiny speed so it doesn't visibly move but has a valid heading
+    v.vel = startDir.copy().mult(0.001);
+    
+    // Force sensor update immediately
+    if (v.rays && v.rays.length) {
+      const angle = v.vel.heading();
+      for (let r of v.rays) {
+        if (r && typeof r.rotate === 'function') r.rotate(angle);
+      }
+    }
   }
 }
 
@@ -1780,11 +2136,27 @@ function isInteractingWithUI(event) {
   if (maxSpeedSlider) targets.push(maxSpeedSlider.elt);
   if (maxForceSlider) targets.push(maxForceSlider.elt);
   if (sightSlider) targets.push(sightSlider.elt);
+  if (totalCarsSlider) targets.push(totalCarsSlider.elt);
   return targets.includes(event.target);
 }
 
 function draw() {
   background(0);
+
+  // Update human controls if in RACE mode with human player
+  if (mode === 'RACE' && getHumanVehicle()) {
+    if (!humanRaceState.isGameOver) {
+      updateHumanControls();
+
+      // Update survival time and score
+      humanRaceState.survivalTime = (Date.now() - humanRaceState.startTime) / 1000;
+      const humanVehicle = getHumanVehicle();
+      if (humanVehicle) {
+        // Score = distance traveled + time bonus
+        humanRaceState.score = Math.round(humanVehicle.distanceTravelled + humanRaceState.survivalTime * 10);
+      }
+    }
+  }
 
   // Show the sliders only in the relevant modes.
   if (speedSlider) {
@@ -1964,12 +2336,12 @@ function draw() {
               applySavedParamsToGlobalsAndSliders(loadedBrain.params);
               setTrainingParamsFromSliders();
             }
-            population[i] = new Vehicle(loadedBrain);
+            population[i] = new RobotVehicle(loadedBrain);
           } else {
-            population[i] = new Vehicle();
+            population[i] = new RobotVehicle();
           }
         } else {
-          population[i] = new Vehicle();
+          population[i] = new RobotVehicle();
         }
       }
     }
@@ -1983,7 +2355,7 @@ function draw() {
 
     for (let n = 0; n < cycles; n++) {
       for (let vehicle of population) {
-        vehicle.applyBehaviors(walls);
+        vehicle.applyBehaviors(walls, population);
         const crossed = vehicle.check(checkpoints);
         vehicle.update();
         if (vehicle.fitness > bestP.fitness) {
@@ -2054,6 +2426,13 @@ function draw() {
     fill(235);
     textSize(16);
     text('generation ' + generationCount, 10, 52);
+
+    // Display cars alive / total
+    const carsAlive = population.length;
+    const carsTotal = TOTAL;
+    const sliderVal = totalCarsSlider ? totalCarsSlider.value() : TOTAL;
+    fill(carsAlive > 0 ? color(100, 255, 100) : color(255, 100, 100));
+    text(`cars: ${carsAlive} / ${carsTotal} (slider: ${sliderVal})`, 10, 72);
     pop();
 
     displayControls();
@@ -2073,12 +2452,33 @@ function draw() {
       for (const v of raceVehicles) {
         // In RACE: no respawn. If a car crashes, it stays where it crashed.
         // Other cars continue running.
-        if (!v || v.dead || v.finished) continue;
+        if (!v || v.dead || v.finished) {
+          // Check if human player died
+          if (v instanceof HumanVehicle && v.dead && !humanRaceState.isGameOver) {
+            humanRaceState.isGameOver = true;
+          }
+          continue;
+        }
 
-        v.applyBehaviors(walls);
+        // Link human controls to human vehicle
+        if (v instanceof HumanVehicle) {
+          v.humanControls = humanControls;
+          // Stop updating if game over
+          if (humanRaceState.isGameOver) continue;
+        }
+
+        v.applyBehaviors(walls, raceVehicles);
         v.check(checkpoints);
         v.update();
       }
+    }
+
+    // === WORLD RENDERING (with camera for human player) ===
+    push();
+    // Camera ONLY in human vs robot mode, following human player
+    const humanVehicle = getHumanVehicle();
+    if (cameraState.enabled && humanVehicle && !humanRaceState.isGameOver) {
+      applyCameraTransform();
     }
 
     drawStyledTrack();
@@ -2102,6 +2502,13 @@ function draw() {
       else if (v && typeof v.showLarge === 'function') v.showLarge();
       else if (v) v.show();
     }
+
+    pop();
+    // === END WORLD RENDERING ===
+
+    // === UI RENDERING (not affected by camera - stays on screen) ===
+    // Minimap showing track and racer positions
+    drawMinimap();
 
     // Live ranking overlay (updates automatically when racers overtake)
     const ranking = getRaceRanking(raceVehicles, checkpoints);
@@ -2158,7 +2565,93 @@ function draw() {
     fill(235);
     textSize(12);
     if (speedSlider) text(`speed ${speedSlider.value()}x`, 10, 50);
+
+    // Display number of racers
+    const racersAlive = raceVehicles.filter(v => v && !v.dead && !v.finished).length;
+    const racersTotal = raceVehicles.length;
+    const racersCrashed = raceVehicles.filter(v => v && v.dead).length;
+    fill(racersAlive > 0 ? color(100, 255, 100) : color(255, 100, 100));
+    text(`racers: ${racersAlive} alive / ${racersCrashed} crashed / ${racersTotal} total`, 10, 65);
     pop();
+
+    // Human controls indicator (bottom-right corner)
+    if (getHumanVehicle() && !humanRaceState.isGameOver) {
+      push();
+      const x = width - 150;
+      const y = height - 120;
+
+      noStroke();
+      fill(10, 10, 14, 200);
+      rect(x, y, 140, 115, 12);
+
+      fill(255, 105, 210);
+      textSize(12);
+      textAlign(LEFT);
+      text('HUMAN CONTROLS', x + 10, y + 20);
+
+      fill(200);
+      textSize(10);
+      text(humanControls.accelerating ? '↑ ACCEL' : '↑ ---', x + 10, y + 40);
+      text(humanControls.braking ? '↓ BRAKE' : '↓ ---', x + 10, y + 55);
+      text(humanControls.turningLeft ? '← LEFT' : '← ---', x + 10, y + 70);
+      text(humanControls.turningRight ? '→ RIGHT' : '→ ---', x + 10, y + 85);
+
+      // Speed indicator
+      fill(100, 255, 100);
+      const speedPercent = Math.round(humanControls.speed * 100);
+      text(`Speed: ${speedPercent}%`, x + 10, y + 100);
+      pop();
+
+      // Show score during race
+      push();
+      fill(255, 255, 255);
+      textSize(16);
+      textAlign(CENTER);
+      text(`Score: ${humanRaceState.score}`, width / 2, 80);
+      text(`Time: ${humanRaceState.survivalTime.toFixed(1)}s`, width / 2, 100);
+      pop();
+    }
+
+    // Game Over screen
+    if (getHumanVehicle() && humanRaceState.isGameOver) {
+      push();
+      // Semi-transparent overlay
+      fill(0, 0, 0, 180);
+      rect(0, 0, width, height);
+
+      // Game Over box
+      fill(10, 10, 14, 240);
+      stroke(255, 105, 210);
+      strokeWeight(3);
+      rectMode(CENTER);
+      rect(width / 2, height / 2, 400, 300, 16);
+
+      // Game Over text
+      noStroke();
+      fill(255, 105, 210);
+      textSize(48);
+      textAlign(CENTER);
+      text('GAME OVER', width / 2, height / 2 - 80);
+
+      // Score
+      fill(255, 255, 255);
+      textSize(24);
+      text(`Final Score: ${humanRaceState.score}`, width / 2, height / 2 - 20);
+      text(`Survival Time: ${humanRaceState.survivalTime.toFixed(1)}s`, width / 2, height / 2 + 15);
+
+      const humanVehicle = getHumanVehicle();
+      if (humanVehicle) {
+        text(`Distance: ${Math.round(humanVehicle.distanceTravelled)}`, width / 2, height / 2 + 50);
+      }
+
+      // Restart instructions
+      fill(200);
+      textSize(18);
+      text('Press R to Restart', width / 2, height / 2 + 100);
+      text('Press ESC to Exit', width / 2, height / 2 + 130);
+
+      pop();
+    }
   }
 }
 
@@ -2168,7 +2661,8 @@ function displayControls() {
   textSize(12);
   noStroke();
   // Top-left lightweight status (controls are buttons now)
-  let yPos = 78;
+  // Top-left lightweight status (controls are buttons now)
+  let yPos = 100;
   if (speedSlider) {
     text(`Speed: ${speedSlider.value()}x`, 10, yPos);
     yPos += 18;
@@ -2269,6 +2763,22 @@ function keyPressed() {
 
     return false;
   }
+
+  // RACE mode: Handle restart when human player in game over
+  if (mode === 'RACE' && getHumanVehicle() && humanRaceState.isGameOver) {
+    if (key === 'r' || key === 'R') {
+      // Restart the race
+      const brainNames = raceBrainNames.slice(); // Keep same opponents
+      initRaceVehicles(brainNames, true); // true = include human
+      return false;
+    }
+    if (keyCode === ESCAPE) {
+      // Exit to training mode
+      mode = 'TRAINING';
+      return false;
+    }
+  }
+
   // BUILDING: Click points, ENTER to move to ADJUSTING
   if (mode === "BUILDING") {
     if (keyCode === ENTER) {
